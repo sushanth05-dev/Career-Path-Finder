@@ -1,0 +1,6 @@
+{
+  "name": "CareerPath — AI Career Roadmap & Skill Gap Finder",
+  "description": "Compare your current skills against any target career role to generate a structured skill gap matrix, an 8-week learning roadmap, and 3 portfolio mini-projects powered by Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
