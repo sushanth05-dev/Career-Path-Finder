@@ -1,5 +1,14 @@
-import { useState, type KeyboardEvent } from "react";
-import { ArrowRight, ChevronDown, ChevronUp, Plus, X } from "lucide-react";
+import { useEffect, useState, type KeyboardEvent } from "react";
+import {
+  ArrowRight,
+  ChevronDown,
+  ChevronUp,
+  FileText,
+  Loader2,
+  Plus,
+  X,
+} from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import type { ExperienceLevel } from "../types/roadmap";
 
 interface ProfilePanelProps {
@@ -12,7 +21,7 @@ interface ProfilePanelProps {
   experienceLevel: ExperienceLevel;
   onChangeExperienceLevel: (level: ExperienceLevel) => void;
   isLoading: boolean;
-  onGenerate: () => void;
+  onGenerate: (skillsOverride?: string[]) => void;
   hasRoadmap: boolean;
 }
 
@@ -38,7 +47,11 @@ const SUGGESTED_ROLES = [
   "Backend Software Engineer",
 ];
 
-const EXPERIENCE_LEVELS: ExperienceLevel[] = ["Beginner", "Intermediate", "Advanced"];
+const EXPERIENCE_LEVELS: ExperienceLevel[] = [
+  "Beginner",
+  "Intermediate",
+  "Advanced",
+];
 
 export function ProfilePanel({
   skills,
@@ -56,12 +69,24 @@ export function ProfilePanel({
   const [skillInput, setSkillInput] = useState("");
   const [mobileCollapsed, setMobileCollapsed] = useState(false);
 
-  const addSkill = (raw: string) => {
+  const [importerOpen, setImporterOpen] = useState(false);
+  const [resumeText, setResumeText] = useState("");
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractMessage, setExtractMessage] = useState<string | null>(null);
+  const [extractError, setExtractError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (hasRoadmap) {
+      setMobileCollapsed(true);
+    }
+  }, [hasRoadmap]);
+
+  const computeMergedSkills = (raw: string): string[] => {
     const parts = raw
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
-    if (parts.length === 0) return;
+    if (parts.length === 0) return skills;
 
     const existingLower = new Set(skills.map((s) => s.toLowerCase()));
     const next = [...skills];
@@ -71,8 +96,16 @@ export function ProfilePanel({
         existingLower.add(part.toLowerCase());
       }
     }
-    onChangeSkills(next);
+    return next;
+  };
+
+  const addSkill = (raw: string): string[] => {
+    const next = computeMergedSkills(raw);
+    if (next !== skills) {
+      onChangeSkills(next);
+    }
     setSkillInput("");
+    return next;
   };
 
   const removeSkill = (skillToRemove: string) => {
@@ -85,6 +118,75 @@ export function ProfilePanel({
       addSkill(skillInput);
     } else if (e.key === "Backspace" && !skillInput && skills.length > 0) {
       removeSkill(skills[skills.length - 1]);
+    }
+  };
+
+  const handleExtractSkills = async () => {
+    if (resumeText.trim().length < 10) {
+      setExtractError("Paste at least a short sentence listing coursework or tools.");
+      return;
+    }
+
+    setIsExtracting(true);
+    setExtractError(null);
+    setExtractMessage(null);
+
+    try {
+      const res = await fetch("/api/extract-skills", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: resumeText.trim() }),
+      });
+
+      const raw = await res.text();
+      const data = raw ? (JSON.parse(raw) as {
+        skills?: string[];
+        suggestedLevel?: ExperienceLevel;
+        error?: string;
+      }) : null;
+
+      if (!res.ok) {
+        throw new Error(data?.error || `Extraction failed (${res.status}).`);
+      }
+
+      const extracted = Array.isArray(data?.skills) ? data.skills : [];
+      if (extracted.length === 0) {
+        setExtractError("No technical skills detected. Try including specific languages or tools.");
+        return;
+      }
+
+      const existingLower = new Set(skills.map((s) => s.toLowerCase()));
+      const merged = [...skills];
+      let addedCount = 0;
+      for (const s of extracted) {
+        if (!existingLower.has(s.toLowerCase())) {
+          merged.push(s);
+          existingLower.add(s.toLowerCase());
+          addedCount++;
+        }
+      }
+
+      onChangeSkills(merged);
+      if (
+        data?.suggestedLevel === "Beginner" ||
+        data?.suggestedLevel === "Intermediate" ||
+        data?.suggestedLevel === "Advanced"
+      ) {
+        onChangeExperienceLevel(data.suggestedLevel);
+      }
+
+      setExtractMessage(
+        addedCount > 0
+          ? `Added ${addedCount} skill${addedCount === 1 ? "" : "s"} from your text.`
+          : "All detected skills are already in your list."
+      );
+      setResumeText("");
+    } catch (err: unknown) {
+      setExtractError(
+        err instanceof Error ? err.message : "Could not extract skills."
+      );
+    } finally {
+      setIsExtracting(false);
     }
   };
 
@@ -133,10 +235,8 @@ export function ProfilePanel({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (skillInput.trim()) {
-            addSkill(skillInput);
-          }
-          onGenerate();
+          const nextSkills = skillInput.trim() ? addSkill(skillInput) : skills;
+          onGenerate(nextSkills);
         }}
         className={`${mobileCollapsed ? "hidden lg:block" : "block"} mt-5 space-y-5`}
       >
@@ -159,7 +259,8 @@ export function ProfilePanel({
           />
           <div className="mt-2 flex flex-wrap gap-1.5">
             {SUGGESTED_ROLES.map((role) => {
-              const selected = targetRole.trim().toLowerCase() === role.toLowerCase();
+              const selected =
+                targetRole.trim().toLowerCase() === role.toLowerCase();
               return (
                 <button
                   key={role}
@@ -189,10 +290,81 @@ export function ProfilePanel({
             >
               Current Skills
             </label>
-            <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
-              {skills.length} added
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setImporterOpen((prev) => !prev);
+                  setExtractError(null);
+                  setExtractMessage(null);
+                }}
+                className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline cursor-pointer whitespace-nowrap"
+              >
+                <FileText className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>{importerOpen ? "Close Import" : "Import from Bio"}</span>
+              </button>
+              <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">
+                ·
+              </span>
+              <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                {skills.length}
+              </span>
+            </div>
           </div>
+
+          <AnimatePresence initial={false}>
+            {importerOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.15 }}
+                className="mb-3 p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2.5"
+              >
+                <label
+                  htmlFor="resume-bio-textarea"
+                  className="block text-xs font-medium text-slate-700 dark:text-slate-300"
+                >
+                  Paste resume summary or coursework to auto-extract skills
+                </label>
+                <textarea
+                  id="resume-bio-textarea"
+                  rows={3}
+                  value={resumeText}
+                  onChange={(e) => setResumeText(e.target.value)}
+                  placeholder="e.g. CS sophomore with coursework in C++, Python, discrete math, SQL databases, and basic React web projects..."
+                  className="w-full p-2.5 text-xs text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-md placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-600 dark:focus:ring-blue-500"
+                />
+                {extractError && (
+                  <p className="text-xs text-red-600 dark:text-red-400">
+                    {extractError}
+                  </p>
+                )}
+                {extractMessage && (
+                  <p className="text-xs text-emerald-700 dark:text-emerald-400">
+                    {extractMessage}
+                  </p>
+                )}
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => void handleExtractSkills()}
+                    disabled={isExtracting || resumeText.trim().length < 10}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-700 hover:bg-blue-800 dark:bg-blue-600 dark:hover:bg-blue-500 disabled:bg-slate-300 dark:disabled:bg-slate-800 disabled:text-slate-500 rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    {isExtracting ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                        <span>Extracting...</span>
+                      </>
+                    ) : (
+                      <span>Extract Skills</span>
+                    )}
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <div className="flex gap-2">
             <input
@@ -238,7 +410,9 @@ export function ProfilePanel({
 
           {availableSuggestions.length > 0 && (
             <div className="mt-3">
-              <p className="text-xs text-slate-500 dark:text-slate-400 mb-1.5">Quick add:</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mb-1.5">
+                Quick add:
+              </p>
               <div className="flex flex-wrap gap-1.5">
                 {availableSuggestions.slice(0, 6).map((suggestion) => (
                   <button
@@ -328,7 +502,11 @@ export function ProfilePanel({
         {/* Submit CTA */}
         <button
           type="submit"
-          disabled={isLoading || skills.length === 0 || !targetRole.trim()}
+          disabled={
+            isLoading ||
+            (skills.length === 0 && !skillInput.trim()) ||
+            !targetRole.trim()
+          }
           className="w-full min-h-[44px] px-4 py-2.5 inline-flex items-center justify-center gap-2 text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 dark:bg-blue-600 dark:hover:bg-blue-500 disabled:bg-slate-300 dark:disabled:bg-slate-800 disabled:text-slate-500 dark:disabled:text-slate-500 rounded-lg transition-colors whitespace-nowrap cursor-pointer disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900"
         >
           <span>{isLoading ? "Building Your Roadmap..." : "Generate Roadmap"}</span>

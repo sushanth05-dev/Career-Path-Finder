@@ -1,6 +1,7 @@
 import { Download, Sparkles } from "lucide-react";
+import { motion } from "motion/react";
 
-export type ActiveView = "all" | "skills" | "roadmap" | "projects";
+export type ActiveView = "all" | "skills" | "roadmap" | "projects" | "interview";
 
 interface TopBarProps {
   activeView: ActiveView;
@@ -15,6 +16,7 @@ const NAV_ITEMS: { id: ActiveView; label: string }[] = [
   { id: "skills", label: "Skill Matrix" },
   { id: "roadmap", label: "8-Week Plan" },
   { id: "projects", label: "Projects" },
+  { id: "interview", label: "Interview Prep" },
 ];
 
 export function TopBar({
@@ -25,7 +27,7 @@ export function TopBar({
   onLoadSample,
 }: TopBarProps) {
   return (
-    <header className="sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-800 transition-colors">
+    <header className="sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 transition-colors">
       <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between gap-8">
         <a
           href="#top"
@@ -57,7 +59,9 @@ export function TopBar({
               >
                 {item.label}
                 {isActive && (
-                  <span
+                  <motion.span
+                    layoutId="topbar-nav-underline"
+                    transition={{ type: "spring", stiffness: 460, damping: 36 }}
                     aria-hidden="true"
                     className="absolute inset-x-0 -bottom-[17px] h-0.5 bg-blue-600 dark:bg-blue-400"
                   />

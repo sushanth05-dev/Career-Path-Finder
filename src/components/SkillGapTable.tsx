@@ -1,56 +1,123 @@
 import { useMemo, useState } from "react";
-import { BookOpen, CheckCircle2, Clock, Search } from "lucide-react";
+import { ArrowUpDown, BookOpen, CheckCircle2, Clock, Search } from "lucide-react";
+import { motion } from "motion/react";
 import type { SkillGapItem, SkillStatus } from "../types/roadmap";
+import { getSkillKey } from "../utils/exportPlan";
 
 interface SkillGapTableProps {
   items: SkillGapItem[];
+  statusOverrides: Record<string, SkillStatus>;
+  onCycleSkillStatus: (skillKey: string, currentStatus: SkillStatus) => void;
 }
 
 type StatusFilter = "All" | SkillStatus;
+type SortKey = "default" | "hoursDesc" | "priority";
 
 const FILTERS: StatusFilter[] = ["All", "Have", "Partial", "To Learn"];
 
-function StatusIndicator({ status }: { status: SkillStatus }) {
+const PRIORITY_RANK: Record<string, number> = {
+  Critical: 0,
+  High: 1,
+  Recommended: 2,
+};
+
+function StatusButton({
+  status,
+  skillName,
+  onClick,
+}: {
+  status: SkillStatus;
+  skillName: string;
+  onClick: () => void;
+}) {
+  const nextLabel =
+    status === "To Learn"
+      ? "Partial"
+      : status === "Partial"
+      ? "Have"
+      : "To Learn";
+
   if (status === "Have") {
     return (
-      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-400 whitespace-nowrap">
+      <button
+        type="button"
+        onClick={onClick}
+        title={`Click to mark ${skillName} as ${nextLabel}`}
+        aria-label={`${skillName} status: Have. Click to change to ${nextLabel}`}
+        className="inline-flex items-center gap-1.5 px-2 py-1 -mx-2 rounded-md text-xs font-medium text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors whitespace-nowrap cursor-pointer"
+      >
         <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
         <span>Have</span>
-      </span>
+      </button>
     );
   }
   if (status === "Partial") {
     return (
-      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400 whitespace-nowrap">
+      <button
+        type="button"
+        onClick={onClick}
+        title={`Click to mark ${skillName} as ${nextLabel}`}
+        aria-label={`${skillName} status: Partial. Click to change to ${nextLabel}`}
+        className="inline-flex items-center gap-1.5 px-2 py-1 -mx-2 rounded-md text-xs font-medium text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 transition-colors whitespace-nowrap cursor-pointer"
+      >
         <Clock className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
         <span>Partial</span>
-      </span>
+      </button>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 dark:text-blue-400 whitespace-nowrap">
+    <button
+      type="button"
+      onClick={onClick}
+      title={`Click to mark ${skillName} as ${nextLabel}`}
+      aria-label={`${skillName} status: To Learn. Click to change to ${nextLabel}`}
+      className="inline-flex items-center gap-1.5 px-2 py-1 -mx-2 rounded-md text-xs font-medium text-blue-700 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 transition-colors whitespace-nowrap cursor-pointer"
+    >
       <BookOpen className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
       <span>To Learn</span>
-    </span>
+    </button>
   );
 }
 
-export function SkillGapTable({ items }: SkillGapTableProps) {
+export function SkillGapTable({
+  items,
+  statusOverrides,
+  onCycleSkillStatus,
+}: SkillGapTableProps) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
+  const [sortBy, setSortBy] = useState<SortKey>("default");
   const [query, setQuery] = useState("");
 
+  const resolvedItems = useMemo(
+    () =>
+      items.map((item) => {
+        const key = getSkillKey(item.skill, item.category);
+        return {
+          ...item,
+          key,
+          effectiveStatus: statusOverrides[key] ?? item.currentStatus,
+        };
+      }),
+    [items, statusOverrides]
+  );
+
   const counts = useMemo(() => {
-    const have = items.filter((i) => i.currentStatus === "Have").length;
-    const partial = items.filter((i) => i.currentStatus === "Partial").length;
-    const toLearn = items.filter((i) => i.currentStatus === "To Learn").length;
-    return { All: items.length, Have: have, Partial: partial, "To Learn": toLearn };
-  }, [items]);
+    const have = resolvedItems.filter((i) => i.effectiveStatus === "Have").length;
+    const partial = resolvedItems.filter((i) => i.effectiveStatus === "Partial").length;
+    const toLearn = resolvedItems.filter((i) => i.effectiveStatus === "To Learn").length;
+    return {
+      All: resolvedItems.length,
+      Have: have,
+      Partial: partial,
+      "To Learn": toLearn,
+    };
+  }, [resolvedItems]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return items.filter((item) => {
+    const list = resolvedItems.filter((item) => {
       const matchesStatus =
-        statusFilter === "All" || item.currentStatus === statusFilter;
+        statusFilter === "All" || item.effectiveStatus === statusFilter;
       const matchesQuery =
         !q ||
         item.skill.toLowerCase().includes(q) ||
@@ -58,14 +125,41 @@ export function SkillGapTable({ items }: SkillGapTableProps) {
         item.targetRequirement.toLowerCase().includes(q);
       return matchesStatus && matchesQuery;
     });
-  }, [items, statusFilter, query]);
+
+    if (sortBy === "hoursDesc") {
+      return [...list].sort((a, b) => b.estimatedHours - a.estimatedHours);
+    }
+    if (sortBy === "priority") {
+      return [...list].sort(
+        (a, b) =>
+          (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9)
+      );
+    }
+    return list;
+  }, [resolvedItems, statusFilter, query, sortBy]);
+
+  const cycleSort = () => {
+    setSortBy((prev) =>
+      prev === "default" ? "priority" : prev === "priority" ? "hoursDesc" : "default"
+    );
+  };
+
+  const sortLabel =
+    sortBy === "priority"
+      ? "Sorted: Priority"
+      : sortBy === "hoursDesc"
+      ? "Sorted: Study Hrs"
+      : "Sort";
 
   return (
-    <section
+    <motion.section
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, delay: 0.04, ease: [0.16, 1, 0.3, 1] }}
       aria-labelledby="skill-gap-heading"
       className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden transition-colors"
     >
-      <div className="p-5 sm:p-6 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="p-5 sm:p-6 border-b border-slate-200 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
           <h2
             id="skill-gap-heading"
@@ -74,11 +168,11 @@ export function SkillGapTable({ items }: SkillGapTableProps) {
             Skills Already Have vs. Skills to Learn
           </h2>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Competency comparison against entry-level target role requirements
+            Click any skill status to update your progress as you learn
           </p>
         </div>
 
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+        <div className="no-print flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
           <div className="relative">
             <Search
               className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
@@ -90,9 +184,18 @@ export function SkillGapTable({ items }: SkillGapTableProps) {
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Filter skills..."
               aria-label="Filter skills"
-              className="w-full sm:w-48 h-9 pl-9 pr-3 text-sm text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:bg-white dark:focus:bg-slate-950 focus:ring-2 focus:ring-blue-600 dark:focus:ring-blue-500 focus:border-blue-600 dark:focus:border-blue-500"
+              className="w-full sm:w-44 h-9 pl-9 pr-3 text-sm text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:bg-white dark:focus:bg-slate-950 focus:ring-2 focus:ring-blue-600 dark:focus:ring-blue-500 focus:border-blue-600 dark:focus:border-blue-500"
             />
           </div>
+
+          <button
+            type="button"
+            onClick={cycleSort}
+            className="h-9 px-3 inline-flex items-center justify-center gap-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" aria-hidden="true" />
+            <span>{sortLabel}</span>
+          </button>
 
           <div
             role="group"
@@ -106,13 +209,22 @@ export function SkillGapTable({ items }: SkillGapTableProps) {
                   key={filter}
                   type="button"
                   onClick={() => setStatusFilter(filter)}
-                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  className={`relative px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                     active
-                      ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs"
+                      ? "text-slate-900 dark:text-slate-100"
                       : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100"
                   }`}
                 >
-                  {filter} ({counts[filter]})
+                  {active && (
+                    <motion.span
+                      layoutId="skill-filter-indicator"
+                      transition={{ type: "spring", stiffness: 450, damping: 35 }}
+                      className="absolute inset-0 bg-white dark:bg-slate-900 rounded-md shadow-xs"
+                    />
+                  )}
+                  <span className="relative z-10">
+                    {filter} ({counts[filter]})
+                  </span>
                 </button>
               );
             })}
@@ -152,19 +264,27 @@ export function SkillGapTable({ items }: SkillGapTableProps) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
-                {filtered.map((row) => (
+                {filtered.map((row, idx) => (
                   <tr
-                    key={`${row.skill}-${row.category}`}
+                    key={`${row.key}-${idx}`}
                     className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
                   >
                     <td className="py-3.5 pl-6 pr-4 align-top">
-                      <div className="font-medium text-slate-900 dark:text-slate-100">{row.skill}</div>
+                      <div className="font-medium text-slate-900 dark:text-slate-100">
+                        {row.skill}
+                      </div>
                       <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                         {row.category}
                       </div>
                     </td>
                     <td className="py-3.5 px-4 align-top">
-                      <StatusIndicator status={row.currentStatus} />
+                      <StatusButton
+                        status={row.effectiveStatus}
+                        skillName={row.skill}
+                        onClick={() =>
+                          onCycleSkillStatus(row.key, row.effectiveStatus)
+                        }
+                      />
                     </td>
                     <td className="py-3.5 px-4 align-top text-slate-600 dark:text-slate-300">
                       {row.currentLevel}
@@ -186,7 +306,9 @@ export function SkillGapTable({ items }: SkillGapTableProps) {
                       </span>
                     </td>
                     <td className="py-3.5 pl-4 pr-6 align-top text-right font-mono text-xs tabular-nums text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                      {row.estimatedHours === 0 ? "0 hrs" : `${row.estimatedHours} hrs`}
+                      {row.effectiveStatus === "Have"
+                        ? "0 hrs"
+                        : `${row.estimatedHours} hrs`}
                     </td>
                   </tr>
                 ))}
@@ -196,11 +318,8 @@ export function SkillGapTable({ items }: SkillGapTableProps) {
 
           {/* Mobile Stacked List View */}
           <div className="md:hidden divide-y divide-slate-100 dark:divide-slate-800">
-            {filtered.map((row) => (
-              <div
-                key={`${row.skill}-${row.category}-mobile`}
-                className="p-4 space-y-2.5"
-              >
+            {filtered.map((row, idx) => (
+              <div key={`${row.key}-mobile-${idx}`} className="p-4 space-y-2.5">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="font-medium text-sm text-slate-900 dark:text-slate-100">
@@ -210,20 +329,32 @@ export function SkillGapTable({ items }: SkillGapTableProps) {
                       {row.category} · {row.priority} priority
                     </div>
                   </div>
-                  <StatusIndicator status={row.currentStatus} />
+                  <StatusButton
+                    status={row.effectiveStatus}
+                    skillName={row.skill}
+                    onClick={() =>
+                      onCycleSkillStatus(row.key, row.effectiveStatus)
+                    }
+                  />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 pt-1 text-xs">
                   <div>
-                    <span className="block text-slate-400 dark:text-slate-500">Current</span>
+                    <span className="block text-slate-400 dark:text-slate-500">
+                      Current
+                    </span>
                     <span className="text-slate-700 dark:text-slate-200 font-medium">
                       {row.currentLevel}
                     </span>
                   </div>
                   <div className="text-right">
-                    <span className="block text-slate-400 dark:text-slate-500">Est. Study</span>
+                    <span className="block text-slate-400 dark:text-slate-500">
+                      Est. Study
+                    </span>
                     <span className="font-mono tabular-nums text-slate-800 dark:text-slate-200 font-medium">
-                      {row.estimatedHours} hrs
+                      {row.effectiveStatus === "Have"
+                        ? "0 hrs"
+                        : `${row.estimatedHours} hrs`}
                     </span>
                   </div>
                 </div>
@@ -237,6 +368,6 @@ export function SkillGapTable({ items }: SkillGapTableProps) {
           </div>
         </>
       )}
-    </section>
+    </motion.section>
   );
 }
